@@ -22,7 +22,6 @@ usage:
     $name start|stop
     $name enable|disable <ruleset>
     $name insert|append|delete <seqno> <command>
-    $name delete <command>
     $name try|commit
     $name restore previous|list|<snapshot>
     $name run start|stop <ruleset>...
@@ -174,18 +173,83 @@ do_run () {
     return 1
 }
 
-# Check commands
-case "$1" in
-    '')
-        print_usage 1>&2
+# Start service by applying committed configuration
+do_start () {
+    if [ -d "$committed" ]; then
+        mkdir -p "$rundir"
+        ln -s "$committed" "$current"
+        do_run start "$committed"
+    else
+        echo "ERROR: No committed configuration found: $committed" 1>&2
+        return 1
+    fi
+}
+
+# Stop service by tearing down current configuration
+do_stop () {
+    local ret
+    ret=0
+    if [ -L "$current" ]; then
+        if ! do_run stop "$(readlink "$current")"; then
+            ret=1
+        fi
+        rm "$current"
+    fi
+    return $ret
+}
+
+# Enable ruleset
+# $1 - ruleset
+do_enable () {
+    if [ -e "$rulesets/$1" ]; then
+        if [ ! -e "$pending/$1" ]; then
+            mkdir -p "$pending"
+            ln -s "$rulesets/$1" "$pending/$(dirname "$1")"
+        fi
+    else
+        echo "ERROR: Unknown ruleset: $1" 1>&2
+        return 1
+    fi
+}
+
+# Disable ruleset
+# $1 - ruleset
+do_disable () {
+    if [ -e "$pending/$1" ]; then
+        if [ -L "$pending/$1" ]; then
+            rm "$pending/$1"
+        else
+            echo "ERROR: Can not disable non-linked ruleset: $1" 1>&2
+            return 1
+        fi
+    fi
+}
+
+# Checks number of parameters
+# $1 - actual number of parameters
+# $2 - expected number of parameters
+check_n_params () {
+    if [ $1 -ne $2 ]; then
+        echo 'ERROR: Unexpected number of parameters (try -h for help)' 1>&2
         exit 1
-        ;;
+    fi
+}
+
+# Use secure umask
+umask 022
+
+# Check commands
+if [ $# -lt 1 ]; then
+    print_usage 1>&2
+    exit 1
+fi
+cmd="$1"
+shift
+case "$cmd" in
     help|-h)
         print_usage
-        exit 0
         ;;
     run)
-        shift
         if [ "$#" -lt 2 ]; then
             echo 'ERROR: Expected mode and ruleset(s) as parameters' 1>&2
             exit 1
@@ -214,4 +278,34 @@ case "$1" in
             exit 1
         fi
         ;;
+    start)
+        check_n_params $# 0
+        do_stop || true
+        do_start
+        ;;
+    stop)
+        check_n_params $# 0
+        do_stop
+        ;;
+    try|commit)
+        func="do_$cmd"
+        check_n_params $# 0
+        "$func" "$@"
+        ;;
+    enable|disable|restore)
+        func="do_$cmd"
+        check_n_params $# 1
+        "$func" "$@"
+        ;;
+    insert|append|delete)
+        func="do_$cmd"
+        check_n_params $# 2
+        "$func" "$@"
+        ;;
+    *)
+        echo "ERROR: Unrecognized command: $1" 1>&2
+        exit 1
+        ;;
 esac
+
+exit 0
