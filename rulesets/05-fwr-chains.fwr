@@ -1,0 +1,85 @@
+# FWR core chains for each standard chain, e.g. INPUT-FWR for INPUT etc.
+#
+# Using these FWR chains instead of standard chains makes it possible to
+# dynamically apply and tear down firewall rules even when other services
+# or applications are using the standard iptables chains for their own rules.
+# The FWR chains are inserted at the top of each standard chain on startup.
+
+# Set up FWR chains for both iptables and ip6tables
+|iptables ip6tables
+
+*filter
+-N INPUT-FWR
+-N FORWARD-FWR
+-N OUTPUT-FWR
+-I INPUT -j INPUT-FWR
+-I FORWARD -j FORWARD-FWR
+-I OUTPUT -j OUTPUT-FWR
+
+*mangle
+-N PREROUTING-FWR
+-N INPUT-FWR
+-N FORWARD-FWR
+-N OUTPUT-FWR
+-N POSTROUTING-FWR
+-I PREROUTING -j PREROUTING-FWR
+-I INPUT -j INPUT-FWR
+-I FORWARD -j FORWARD-FWR
+-I OUTPUT -j OUTPUT-FWR
+-I POSTROUTING -j POSTROUTING-FWR
+
+*nat
+-N PREROUTING-FWR
+-N INPUT-FWR
+-N OUTPUT-FWR
+-N POSTROUTING-FWR
+-I PREROUTING -j PREROUTING-FWR
+-I INPUT -j INPUT-FWR
+-I OUTPUT -j OUTPUT-FWR
+-I POSTROUTING -j POSTROUTING-FWR
+
+
+# Tear down FWR chains on stop
+!stop
+
+*filter
+-D INPUT -j INPUT-FWR
+-D FORWARD -j FORWARD-FWR
+-D OUTPUT -j OUTPUT-FWR
+-F INPUT-FWR
+-F FORWARD-FWR
+-F OUTPUT-FWR
+-X INPUT-FWR
+-X FORWARD-FWR
+-X OUTPUT-FWR
+
+*mangle
+-D PREROUTING -j PREROUTING-FWR
+-D INPUT -j INPUT-FWR
+-D FORWARD -j FORWARD-FWR
+-D OUTPUT -j OUTPUT-FWR
+-D POSTROUTING -j POSTROUTING-FWR
+-F PREROUTING-FWR
+-F INPUT-FWR
+-F FORWARD-FWR
+-F OUTPUT-FWR
+-F POSTROUTING-FWR
+-X PREROUTING-FWR
+-X INPUT-FWR
+-X FORWARD-FWR
+-X OUTPUT-FWR
+-X POSTROUTING-FWR
+
+*nat
+-D PREROUTING -j PREROUTING-FWR
+-D INPUT -j INPUT-FWR
+-D OUTPUT -j OUTPUT-FWR
+-D POSTROUTING -j POSTROUTING-FWR
+-F PREROUTING-FWR
+-F INPUT-FWR
+-F OUTPUT-FWR
+-F POSTROUTING-FWR
+-X PREROUTING-FWR
+-X INPUT-FWR
+-X OUTPUT-FWR
+-X POSTROUTING-FWR

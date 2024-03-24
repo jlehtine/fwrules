@@ -1,0 +1,217 @@
+#! /bin/sh
+
+# Stop on unexpected errors
+set -e
+
+# Paths
+etcdir=/etc/fwrules
+rundir=/run/fwrules
+rulesets="$etcdir/rulesets"
+committed="$etcdir/committed"
+pending="$etcdir/pending"
+history="$etcdir/history"
+current="$rundir/current"
+
+# Output usage to stdout
+print_usage () {
+    local name
+    name=$(basename "$0")
+    cat <<EOS
+$name - Simple management of iptables rules and rulesets
+usage:
+    $name start|stop
+    $name enable|disable <ruleset>
+    $name insert|append|delete <seqno> <command>
+    $name delete <command>
+    $name try|commit
+    $name restore previous|list|<snapshot>
+    $name run start|stop <ruleset>...
+    $name help|-h
+
+commands:
+    start   apply the latest committed configuration
+            (invoked by systemd when starting fwrules.service)
+    stop    stop by tearing down the rules
+    enable  enable the specified ruleset
+    disable disable the specified ruleset
+    insert  insert a single command with the specified sequence number
+    append  append a single command with the specified sequence number
+    delete  delete a single command with the specified sequence number
+    try     apply the pending configuration temporarily and optionally commit
+            (old configuration is restored after a timeout or on reboot)
+    commit  apply and commit the pending configuration permanently
+    restore restore or list earlier committed configurations
+    run     run the the specified rulesets in start or stop mode
+            (for experimenting only, does not update permanent configuration)
+    help|-h print this help and exit
+EOS
+}
+
+# Apply specified rule file
+# $1 - start|stop
+# $2 - ruleset file to apply
+apply_fwr () {
+    local skip backends backend table tableopt rule cmd ret
+    if [ "$1" = stop ]; then
+        skip=true
+    else
+        skip=false
+    fi
+    ret=0
+    backends=
+    table=
+    grep -E '^\s*[^\s#]' < "$2" | sed -e 's/^\s\s*//' -e 's/\s\s*$//' | while read rule; do
+        # Handle specials
+        case "$rule" in
+
+            # Backend(s) specification
+            '|'*)
+                backends=${rule#'|'}
+                continue
+                ;;
+
+            # Table specification
+            '*'*)
+                table=${rule#'*'}
+                continue
+                ;;
+
+            # Marker for start of stop rules
+            !stop)
+                if [ "$1" = stop ]; then
+                    skip=false
+                else
+                    return $ret
+                fi
+                continue
+                ;;
+
+            # Reserve some specific special characters for future use
+            [\$%!]*)
+                echo "ERROR: Ignoring rule starting with a reserved character: $rule" 1>&2
+                echo 'Hint: Add "--" as the first word on rule to pass it on to the backend as is.'
+                ret=1
+                continue
+                ;;
+
+            '--'[\ \t]*)
+                rule=$(echo "$rule" | sed -e 's/^--\s\s*//')
+                ;;
+        esac
+
+        # Check if rule should be skipped
+        if [ $skip = true ]; then
+            continue
+        fi
+
+        # Check backends
+        if [ -z "$backends" ]; then
+            echo "ERROR: Backend(s) not specified, ignoring rule: $rule" 1>&2
+            echo 'Hint: Insert line "|iptables", "|ip6tables", or "|iptables ip6tables" at the top of the rule file.' 1>&2
+            ret=1
+            continue
+        fi
+
+        # Set table option
+        tableopt=
+        if [ -n "$table" ]; then
+            tableopt="-t '$table'"
+        fi
+
+        # Apply rule
+        for backend in $backends; do
+            cmd="$backend $tableopt $rule"
+            if ! eval "$cmd"; then
+                echo "ERROR: Command failed: $cmd" 1>&2
+                ret=1
+            fi
+        done
+
+    done
+    return $ret
+}
+
+# Runs the specified rulesets
+# $1 - start|stop
+# $2 - ruleset directory or file
+do_run () {
+    local lsopt f ret
+    if [ ! -e "$2" ]; then
+        echo "ERROR: File does not exist: $2" 1>&2
+        return 1
+    elif [ -d "$2" ]; then
+        ret=0
+        lsopt=
+        if [ "$1" = stop ]; then
+            lsopt='-r'
+        fi
+        ls -1 $lsopt "$2" | while read f; do
+            if ! do_run "$1" "$f"; then
+                ret=1
+            fi
+        done
+        return $ret
+    elif [ -f "$2" ]; then
+        if [ "$2" = "${2%.fwr}.fwr" ]; then
+            if [ -x "$2" ]; then
+                echo "WARNING: FWR ruleset should not be marked executable: $2" 1>&2
+            fi
+            apply_fwr "$1" "$2" || {
+                echo "ERROR: Ruleset failed: $2" 1>&2
+                return 1
+            }
+            return 0
+        elif [ -x "$2" ]; then
+            "$2" "$1" || {
+                echo "ERROR: Ruleset failed with status code $?: $2" 1>&2
+                return 1
+            }
+            return 0
+        fi
+    fi
+    echo "ERROR: Skipping unsupported non-executable ruleset item: $2" 1>&2
+    echo 'Hint: Use files named as *.fwr or executable files.' 1>&2
+    return 1
+}
+
+# Check commands
+case "$1" in
+    '')
+        print_usage 1>&2
+        exit 1
+        ;;
+    help|-h)
+        print_usage
+        exit 0
+        ;;
+    run)
+        shift
+        if [ "$#" -lt 2 ]; then
+            echo 'ERROR: Expected mode and ruleset(s) as parameters' 1>&2
+            exit 1
+        fi
+        mode="$1"
+        shift
+        if [ "$mode" = start ] || [ "$mode" = stop ]; then
+            ret=0
+            for rs in "$@"; do
+                case "$rs" in
+                    */*)
+                        if ! do_run "$mode" "$rs"; then
+                            ret=1
+                        fi
+                        ;;
+                    *)
+                        if ! do_run "$mode" "$rulesets/$rs"; then
+                            ret=1
+                        fi
+                        ;;
+                esac
+            done
+            exit $ret
+        else
+            echo "ERROR: Unexpected mode (expected \"start\" or \"stop\"): $mode" 1>&2
+            exit 1
+        fi
+        ;;
+esac

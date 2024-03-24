@@ -1,2 +1,2 @@
 # fwrules
-fwrules - Simple initialization of configurable iptables rules
+fwrules - Simple management of iptables rules and rulesets
