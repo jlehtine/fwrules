@@ -19,13 +19,13 @@ print_usage () {
     cat <<EOS
 $name - Simple management of iptables rules and rulesets
 usage:
-    $name start|stop
-    $name enable|disable <ruleset>
-    $name insert|append|delete <seqno> <command>
-    $name try|commit
-    $name restore previous|list|<snapshot>
-    $name run start|stop <ruleset>...
-    $name help|-h
+    $name [options] start|stop
+    $name [options] enable|disable <ruleset>
+    $name [options] insert|append|delete <seqno> <command>
+    $name [options] try|commit
+    $name [options] restore previous|list|<snapshot>
+    $name [options] run start|stop|<mode> <ruleset>...
+    $name [options] help|-h
 
 commands:
     start   apply the latest committed configuration
@@ -40,53 +40,56 @@ commands:
             (old configuration is restored after a timeout or on reboot)
     commit  apply and commit the pending configuration permanently
     restore restore or list earlier committed configurations
-    run     run the the specified rulesets in start or stop mode
+    run     run the the specified rulesets in specified mode
             (for experimenting only, does not update permanent configuration)
-    help|-h print this help and exit
+    help    print this help and exit
+
+options:
+    -v      verbose mode, display the executed rules etc (repeat for very verbose)
+    -h      print this help and exit
 EOS
 }
 
 # Apply specified rule file
-# $1 - start|stop
+# $1 - start|stop|<other mode>
 # $2 - ruleset file to apply
 apply_fwr () {
-    local skip backends backend table tableopt rule cmd ret
-    if [ "$1" = stop ]; then
-        skip=true
-    else
-        skip=false
-    fi
+    local reqmode ruleset curmode backends backend table tableopt rule cmd ret
+    reqmode="$1"
+    ruleset="$2"
+    [ $verbose = false ] || echo "INFO: Applying mode '$reqmode' of ruleset $ruleset"
+    curmode="start"
+    [ $verbose != very ] || echo "DEBUG: Current mode: $curmode"
     ret=0
     backends=
     table=
-    grep -E '^\s*[^\s#]' < "$2" | sed -e 's/^\s\s*//' -e 's/\s\s*$//' | while read rule; do
+    grep -E '^\s*[^\s#]' < "$ruleset" | sed -e 's/^\s\s*//' -e 's/\s\s*$//' | while read rule; do
         # Handle specials
         case "$rule" in
 
             # Backend(s) specification
             '|'*)
-                backends=${rule#'|'}
+                backends="${rule#'|'}"
+                [ $verbose != very ] || echo "DEBUG: Current backends: $backends"
                 continue
                 ;;
 
             # Table specification
             '*'*)
-                table=${rule#'*'}
+                table="${rule#'*'}"
+                [ $verbose != very ] || echo "DEBUG: Current table: $table"
                 continue
                 ;;
 
-            # Marker for start of stop rules
-            !stop)
-                if [ "$1" = stop ]; then
-                    skip=false
-                else
-                    return $ret
-                fi
+            # Mode specifier (start|stop|<other mode>)
+            !*)
+                curmode="${rule#'!'}"
+                [ $verbose != very ] || echo "DEBUG: Current mode: $curmode"
                 continue
                 ;;
 
             # Reserve some specific special characters for future use
-            [\$%!]*)
+            [\$%]*)
                 echo "ERROR: Ignoring rule starting with a reserved character: $rule" 1>&2
                 echo 'Hint: Add "--" as the first word on rule to pass it on to the backend as is.'
                 ret=1
@@ -97,11 +100,6 @@ apply_fwr () {
                 rule=$(echo "$rule" | sed -e 's/^--\s\s*//')
                 ;;
         esac
-
-        # Check if rule should be skipped
-        if [ $skip = true ]; then
-            continue
-        fi
 
         # Check backends
         if [ -z "$backends" ]; then
@@ -114,12 +112,19 @@ apply_fwr () {
         # Set table option
         tableopt=
         if [ -n "$table" ]; then
-            tableopt="-t '$table'"
+            tableopt="-t $table"
+        fi
+
+        # Check if rule should be skipped
+        if [ "$curmode" != "$reqmode" ]; then
+            [ $verbose != very ] || echo "DEBUG: Skipping mode '$curmode' rule: $tableopt $rule"
+            continue
         fi
 
         # Apply rule
         for backend in $backends; do
             cmd="$backend $tableopt $rule"
+            [ $verbose = false ] || echo "INFO: Applying command: $cmd"
             if ! eval "$cmd"; then
                 echo "ERROR: Command failed: $cmd" 1>&2
                 ret=1
@@ -238,7 +243,28 @@ check_n_params () {
 # Use secure umask
 umask 022
 
-# Check commands
+# Check options and commands
+verbose=false
+while getopts hv opt; do
+    case $opt in
+        h)
+            print_usage
+            exit 0
+            ;;
+        v)
+            if [ $verbose = false ]; then
+                verbose=true
+            else
+                verbose=very
+            fi
+            ;;
+        \?)
+            print_usage 1>&2
+            exit 1
+            ;;
+    esac
+done
+shift $(( $OPTIND - 1 ))
 if [ $# -lt 1 ]; then
     print_usage 1>&2
     exit 1
@@ -256,27 +282,22 @@ case "$cmd" in
         fi
         mode="$1"
         shift
-        if [ "$mode" = start ] || [ "$mode" = stop ]; then
-            ret=0
-            for rs in "$@"; do
-                case "$rs" in
-                    */*)
-                        if ! do_run "$mode" "$rs"; then
-                            ret=1
-                        fi
-                        ;;
-                    *)
-                        if ! do_run "$mode" "$rulesets/$rs"; then
-                            ret=1
-                        fi
-                        ;;
-                esac
-            done
-            exit $ret
-        else
-            echo "ERROR: Unexpected mode (expected \"start\" or \"stop\"): $mode" 1>&2
-            exit 1
-        fi
+        ret=0
+        for rs in "$@"; do
+            case "$rs" in
+                */*)
+                    if ! do_run "$mode" "$rs"; then
+                        ret=1
+                    fi
+                    ;;
+                *)
+                    if ! do_run "$mode" "$rulesets/$rs"; then
+                        ret=1
+                    fi
+                    ;;
+            esac
+        done
+        exit $ret
         ;;
     start)
         check_n_params $# 0
