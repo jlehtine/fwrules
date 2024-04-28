@@ -19,7 +19,7 @@ print_usage () {
     cat <<EOS
 $name - Simple management of iptables rules and rulesets
 usage:
-    $name [options] start|stop
+    $name [options] start|stop|restart
     $name [options] enable|disable <ruleset>
     $name [options] insert|append|delete <seqno> <command>
     $name [options] try|commit
@@ -31,6 +31,7 @@ commands:
     start   apply the latest committed configuration
             (invoked by systemd when starting fwrules.service)
     stop    stop by tearing down the rules
+    restart stop if started and then start
     enable  enable the specified ruleset
     disable disable the specified ruleset
     insert  insert a single command with the specified sequence number
@@ -202,7 +203,12 @@ do_run () {
 
 # Start service by applying committed configuration
 do_start () {
-    if [ -d "$committed" ]; then
+    if [ -L "$current" ]; then
+        error 'Already started'
+        error_hint 'Try: restart'
+        return 1
+    elif [ -d "$committed" ]; then
+        info 'Starting committed ruleset'
         mkdir -p "$rundir"
         ln -s "$committed" "$current"
         do_run start "$committed"
@@ -217,10 +223,13 @@ do_stop () {
     local ret
     ret=0
     if [ -L "$current" ]; then
+        info 'Stopping current ruleset'
         if ! do_run stop "$(readlink "$current")"; then
             ret=1
         fi
         rm "$current"
+    else
+        info "Already stopped"
     fi
     return $ret
 }
@@ -327,6 +336,11 @@ case "$cmd" in
     stop)
         check_n_params $# 0
         do_stop
+        ;;
+    restart)
+        check_n_params $# 0
+        do_stop || true
+        do_start
         ;;
     try|commit)
         func="do_$cmd"
