@@ -50,6 +50,28 @@ options:
 EOS
 }
 
+verbose=false
+
+error () {
+    echo "ERROR: $*" 1>&2
+}
+
+error_hint () {
+    echo "Hint: $*" 1>&2
+}
+
+warning () {
+    echo "WARNING: $*" 1>&2
+}
+
+info () {
+    [ $verbose = false ] || echo "INFO: $*"
+}
+
+debug () {
+    [ $verbose != very ] || echo "DEBUG: $*"
+}
+
 # Apply specified rule file
 # $1 - start|stop|<other mode>
 # $2 - ruleset file to apply
@@ -57,9 +79,9 @@ apply_fwr () {
     local reqmode ruleset curmode backends backend table tableopt rule cmd ret
     reqmode="$1"
     ruleset="$2"
-    [ $verbose = false ] || echo "INFO: Applying mode '$reqmode' of ruleset $ruleset"
+    info "Applying mode '$reqmode' of ruleset $ruleset"
     curmode="start"
-    [ $verbose != very ] || echo "DEBUG: Current mode: $curmode"
+    debug "Current mode: $curmode"
     ret=0
     backends=
     table=
@@ -70,28 +92,28 @@ apply_fwr () {
             # Backend(s) specification
             '|'*)
                 backends="${rule#'|'}"
-                [ $verbose != very ] || echo "DEBUG: Current backends: $backends"
+                debug "Current backends: $backends"
                 continue
                 ;;
 
             # Table specification
             '*'*)
                 table="${rule#'*'}"
-                [ $verbose != very ] || echo "DEBUG: Current table: $table"
+                debug "Current table: $table"
                 continue
                 ;;
 
             # Mode specifier (start|stop|<other mode>)
             !*)
                 curmode="${rule#'!'}"
-                [ $verbose != very ] || echo "DEBUG: Current mode: $curmode"
+                debug "Current mode: $curmode"
                 continue
                 ;;
 
             # Reserve some specific special characters for future use
             [\$%]*)
-                echo "ERROR: Ignoring rule starting with a reserved character: $rule" 1>&2
-                echo 'Hint: Add "--" as the first word on rule to pass it on to the backend as is.'
+                error "Ignoring rule starting with a reserved character: $rule"
+                error_hint 'Add "--" as the first word on rule to pass it on to the backend as is.'
                 ret=1
                 continue
                 ;;
@@ -103,8 +125,8 @@ apply_fwr () {
 
         # Check backends
         if [ -z "$backends" ]; then
-            echo "ERROR: Backend(s) not specified, ignoring rule: $rule" 1>&2
-            echo 'Hint: Insert line "|iptables", "|ip6tables", or "|iptables ip6tables" at the top of the rule file.' 1>&2
+            errro "Backend(s) not specified, ignoring rule: $rule"
+            error_hint 'Insert line "|iptables", "|ip6tables", or "|iptables ip6tables" at the top of the rule file.'
             ret=1
             continue
         fi
@@ -117,16 +139,16 @@ apply_fwr () {
 
         # Check if rule should be skipped
         if [ "$curmode" != "$reqmode" ]; then
-            [ $verbose != very ] || echo "DEBUG: Skipping mode '$curmode' rule: $tableopt $rule"
+            debug "Skipping mode '$curmode' rule: $tableopt $rule"
             continue
         fi
 
         # Apply rule
         for backend in $backends; do
             cmd="$backend $tableopt $rule"
-            [ $verbose = false ] || echo "INFO: Applying command: $cmd"
+            info "Applying command: $cmd"
             if ! eval "$cmd"; then
-                echo "ERROR: Command failed: $cmd" 1>&2
+                error "Command failed: $cmd"
                 ret=1
             fi
         done
@@ -141,7 +163,7 @@ apply_fwr () {
 do_run () {
     local lsopt f ret
     if [ ! -e "$2" ]; then
-        echo "ERROR: File does not exist: $2" 1>&2
+        error "File does not exist: $2"
         return 1
     elif [ -d "$2" ]; then
         ret=0
@@ -158,23 +180,23 @@ do_run () {
     elif [ -f "$2" ]; then
         if [ "$2" = "${2%.fwr}.fwr" ]; then
             if [ -x "$2" ]; then
-                echo "WARNING: FWR ruleset should not be marked executable: $2" 1>&2
+                warning "FWR ruleset should not be marked executable: $2"
             fi
             apply_fwr "$1" "$2" || {
-                echo "ERROR: Ruleset failed: $2" 1>&2
+                error "Ruleset failed: $2"
                 return 1
             }
             return 0
         elif [ -x "$2" ]; then
             "$2" "$1" || {
-                echo "ERROR: Ruleset failed with status code $?: $2" 1>&2
+                error "Ruleset failed with status code $?: $2"
                 return 1
             }
             return 0
         fi
     fi
-    echo "ERROR: Skipping unsupported non-executable ruleset item: $2" 1>&2
-    echo 'Hint: Use files named as *.fwr or executable files.' 1>&2
+    error "Skipping unsupported non-executable ruleset item: $2"
+    error_hint 'Use files named as *.fwr or executable files.'
     return 1
 }
 
@@ -185,7 +207,7 @@ do_start () {
         ln -s "$committed" "$current"
         do_run start "$committed"
     else
-        echo "ERROR: No committed configuration found: $committed" 1>&2
+        error "No committed configuration found: $committed"
         return 1
     fi
 }
@@ -212,7 +234,7 @@ do_enable () {
             ln -s "$rulesets/$1" "$pending/$(dirname "$1")"
         fi
     else
-        echo "ERROR: Unknown ruleset: $1" 1>&2
+        error "Unknown ruleset: $1"
         return 1
     fi
 }
@@ -224,7 +246,7 @@ do_disable () {
         if [ -L "$pending/$1" ]; then
             rm "$pending/$1"
         else
-            echo "ERROR: Can not disable non-linked ruleset: $1" 1>&2
+            error "Can not disable non-linked ruleset: $1"
             return 1
         fi
     fi
@@ -235,7 +257,7 @@ do_disable () {
 # $2 - expected number of parameters
 check_n_params () {
     if [ $1 -ne $2 ]; then
-        echo 'ERROR: Unexpected number of parameters (try -h for help)' 1>&2
+        error 'Unexpected number of parameters (try -h for help)'
         exit 1
     fi
 }
@@ -244,7 +266,6 @@ check_n_params () {
 umask 022
 
 # Check options and commands
-verbose=false
 while getopts hv opt; do
     case $opt in
         h)
@@ -277,7 +298,7 @@ case "$cmd" in
         ;;
     run)
         if [ "$#" -lt 2 ]; then
-            echo 'ERROR: Expected mode and ruleset(s) as parameters' 1>&2
+            error 'Expected mode and ruleset(s) as parameters'
             exit 1
         fi
         mode="$1"
@@ -301,7 +322,6 @@ case "$cmd" in
         ;;
     start)
         check_n_params $# 0
-        do_stop || true
         do_start
         ;;
     stop)
@@ -324,7 +344,7 @@ case "$cmd" in
         "$func" "$@"
         ;;
     *)
-        echo "ERROR: Unrecognized command: $1" 1>&2
+        error "Unrecognized command: $1"
         exit 1
         ;;
 esac
