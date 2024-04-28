@@ -1,0 +1,16 @@
+[Unit]
+Description=Firewall Rules
+
+# Keep the firewall up on shutdown while allowing manual stopping
+DefaultDependencies=no
+After=sysinit.target basic.target network.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/fwrules start
+ExecStop=/usr/sbin/fwrules stop
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,18 @@
+[Unit]
+Description=Firewall Rules for Docker
+
+# Keep the firewall up on shutdown while allowing manual stopping
+DefaultDependencies=no
+After=sysinit.target basic.target network.target docker.service
+Before=shutdown.target
+
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/fwrules run start-docker /run/fwrules/current
+ExecStop=/usr/sbin/fwrules run stop-docker /run/fwrules/current
+RemainAfterExit=yes
+
+[Install]
+WantedBy=docker.service
